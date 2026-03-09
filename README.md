@@ -1,10 +1,10 @@
-# 📞 YadaPhone Mini Clone
+# 📞 Ringvoo Mini Clone
 
 Full browser-based calling app using Twilio Client JS SDK.
 
 ## What's New vs Mini Project
 
-| Feature | Mini Project | YadaPhone Clone |
+| Feature | Mini Project | Ringvoo Clone |
 |---|---|---|
 | Calling | Server-initiated only | Browser → Phone ✅ |
 | Inbound | TwiML only | Rings in browser ✅ |
@@ -27,7 +27,7 @@ Copy **Secret** (shown ONCE) → `TWILIO_API_SECRET`
 ### Step 2: Create TwiML App
 ```
 Twilio Console → Voice → TwiML Apps → Create new TwiML App
-Friendly Name: YadaPhone
+Friendly Name: Ringvoo
 Voice Request URL: https://your-ngrok-url.ngrok.io/twiml/voice
 Method: HTTP POST
 ```
