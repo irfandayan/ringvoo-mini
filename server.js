@@ -287,7 +287,7 @@ app.get('/account/balance', async (req, res) => {
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`\n🚀 Yadaphone Clone running on port ${PORT}`);
+  console.log(`\n🚀 Ringvoo running on port ${PORT}`);
   console.log(`\n📖 Endpoints:`);
   console.log(`   GET  /token              → Generate browser access token`);
   console.log(`   POST /twiml/voice        → TwiML App webhook (outgoing)`);
