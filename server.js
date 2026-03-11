@@ -1,149 +1,110 @@
 /**
  * ============================================================
- * YADAPHONE MINI CLONE - FULL BROWSER CALLING BACKEND
+ * RINGVOO - FULL FEATURED BACKEND
  * ============================================================
- * 
- * WHAT'S NEW vs mini project:
- * 1. Access Token generation (needed for browser SDK)
- * 2. TwiML App routing (browser → phone)
- * 3. Browser → Phone calls
- * 4. Phone → Browser (inbound to browser)
- * 5. Browser → Browser (two users)
- * 6. Call queuing & identity system
+ * Features:
+ * 1. Access Token (browser calling)
+ * 2. Outbound calls (browser → phone)
+ * 3. Inbound calls (phone → browser) ← NEW
+ * 4. Browser → Browser calls
+ * 5. Send SMS ← NEW
+ * 6. Receive SMS webhook ← NEW
+ * 7. SMS history ← NEW
+ * 8. Call logs
+ * 9. Account balance
  * ============================================================
  */
 
-const express = require('express');
-const twilio  = require('twilio');
-const cors    = require('cors');
+const express  = require('express');
+const twilio   = require('twilio');
+const cors     = require('cors');
+const path     = require('path');
 require('dotenv').config();
-
-const path = require('path');
-
-
-
-
 
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cors());
-
-
-
 app.use(express.static(path.join(__dirname, '.')));
+
 // ============================================================
 // TWILIO SETUP
 // ============================================================
-const accountSid    = process.env.TWILIO_ACCOUNT_SID;
-const authToken     = process.env.TWILIO_AUTH_TOKEN;
-const apiKey        = process.env.TWILIO_API_KEY;        // NEW: needed for Access Tokens
-const apiSecret     = process.env.TWILIO_API_SECRET;     // NEW: needed for Access Tokens
-const twimlAppSid   = process.env.TWILIO_TWIML_APP_SID;  // NEW: TwiML App SID
-const twilioNumber  = process.env.TWILIO_PHONE_NUMBER;
-const serverUrl     = process.env.SERVER_URL;
+const accountSid   = process.env.TWILIO_ACCOUNT_SID;
+const authToken    = process.env.TWILIO_AUTH_TOKEN;
+const apiKey       = process.env.TWILIO_API_KEY;
+const apiSecret    = process.env.TWILIO_API_SECRET;
+const twimlAppSid  = process.env.TWILIO_TWIML_APP_SID;
+const twilioNumber = process.env.TWILIO_PHONE_NUMBER;
+const serverUrl    = process.env.SERVER_URL;
 
 const client = twilio(accountSid, authToken);
 
-// In-memory store for active users (use Redis/DB in production)
-const activeUsers = new Map(); // identity → { identity, joinedAt }
+// In-memory stores (use DB in production)
+const activeUsers = new Map();
+const inboundSms  = [];
 
 
 // ============================================================
 // ROUTE 1: GENERATE ACCESS TOKEN
 // GET /token?identity=username
-// 
-// THIS IS THE KEY CONCEPT FOR BROWSER CALLING!
-// Your server generates a short-lived token.
-// The browser uses this token to connect to Twilio.
-// 
-// Flow: Browser → GET /token → your server → returns JWT token
-//       Browser → uses token → connects to Twilio directly
 // ============================================================
 app.get('/token', (req, res) => {
   const identity = req.query.identity || `user_${Date.now()}`;
 
-  /**
-   * AccessToken = JWT that gives browser permission to use Twilio
-   * 
-   * You need:
-   * - accountSid   (from console)
-   * - apiKey       (create in console → API Keys)
-   * - apiSecret    (shown once when creating API key)
-   * - twimlAppSid  (create in console → TwiML Apps)
-   */
   const AccessToken = twilio.jwt.AccessToken;
   const VoiceGrant  = AccessToken.VoiceGrant;
 
-  // Create voice grant - this gives permission to make/receive calls
   const voiceGrant = new VoiceGrant({
-    outgoingApplicationSid: twimlAppSid,  // Which TwiML App handles outgoing calls
-    incomingAllow: true,                   // Allow this browser to RECEIVE calls
+    outgoingApplicationSid: twimlAppSid,
+    incomingAllow: true,  // Allow browser to RECEIVE inbound calls
   });
 
-  // Create the token
   const token = new AccessToken(accountSid, apiKey, apiSecret, {
-    identity: identity,   // Who is this token for (username)
-    ttl: 3600,            // Token expires in 1 hour
+    identity,
+    ttl: 3600,
   });
 
   token.addGrant(voiceGrant);
-
-  // Track active user
   activeUsers.set(identity, { identity, joinedAt: new Date() });
-
   console.log(`🎫 Token generated for: ${identity}`);
 
-  res.json({
-    token: token.toJwt(),   // Send JWT to browser
-    identity: identity,
-  });
+  res.json({ token: token.toJwt(), identity });
 });
 
 
 // ============================================================
-// ROUTE 2: TWIML APP WEBHOOK - Handle OUTGOING calls from browser
-// POST /twiml/voice
-// 
-// When browser makes a call, Twilio hits THIS URL asking "what to do?"
-// We check: is the 'To' a phone number or another browser user?
+// ROUTE 2: OUTGOING CALL TWIML
+// POST /twiml/voice  ← Set this as TwiML App Voice URL
 // ============================================================
 app.post('/twiml/voice', (req, res) => {
-  const to       = req.body.To;       // Who to call
-  const from     = req.body.From;     // Caller identity
-  const callerId = twilioNumber;      // Your Twilio number shows as caller ID
+  const to       = req.body.To;
+  const from     = req.body.From;
+  const callerId = twilioNumber;
 
-  console.log(`📞 Outgoing call: ${from} → ${to}`);
+  console.log(`📞 Outgoing: ${from} → ${to}`);
 
   const twiml = new twilio.twiml.VoiceResponse();
 
   if (!to) {
-    twiml.say('No destination specified. Goodbye.');
+    twiml.say('No destination. Goodbye.');
     twiml.hangup();
-    res.type('text/xml');
-    res.send(twiml.toString());
-    return;
+    return res.type('text/xml').send(twiml.toString());
   }
 
-  const dial = twiml.dial({ callerId });
+  const dial = twiml.dial({
+    callerId,
+    statusCallback: `${serverUrl}/call/status`,
+    statusCallbackMethod: 'POST',
+    statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
+  });
 
   if (to.startsWith('+') || to.match(/^\d+$/)) {
-    /**
-     * CASE 1: Calling a REAL PHONE NUMBER
-     * to = "+971527459432"
-     * Use <Number> to dial a real phone
-     */
     dial.number(to);
-    console.log(`📱 Routing to phone: ${to}`);
-
+    console.log(`📱 → Phone: ${to}`);
   } else {
-    /**
-     * CASE 2: Calling another BROWSER USER
-     * to = "username" (another person using the app)
-     * Use <Client> to dial another browser
-     */
     dial.client(to);
-    console.log(`💻 Routing to browser client: ${to}`);
+    console.log(`💻 → Browser: ${to}`);
   }
 
   res.type('text/xml');
@@ -154,33 +115,39 @@ app.post('/twiml/voice', (req, res) => {
 // ============================================================
 // ROUTE 3: INBOUND CALL HANDLER
 // POST /twiml/inbound
-// When someone calls your Twilio number from a real phone
-// Route it to a browser user
+//
+// ⚠️ SETUP REQUIRED:
+// Twilio Console → Phone Numbers → Active Numbers → your number
+// Voice & Fax → A Call Comes In → Webhook
+// URL: https://your-ngrok-url/twiml/inbound
+// Method: HTTP POST
+//
+// When someone calls +18153678725 → Twilio hits this URL
 // ============================================================
 app.post('/twiml/inbound', (req, res) => {
-  const from = req.body.From;
-  console.log(`📥 Inbound call from: ${from}`);
+  const { From, To, CallSid } = req.body;
+  console.log(`📥 Inbound call | From: ${From} | SID: ${CallSid}`);
 
   const twiml = new twilio.twiml.VoiceResponse();
 
-  // Check if any browser users are online
   if (activeUsers.size > 0) {
     const firstUser = [...activeUsers.values()][0];
+    twiml.say({ voice: 'alice' }, 'Please hold while we connect you.');
 
-    twiml.say({ voice: 'alice' }, `Connecting you now.`);
+    const dial = twiml.dial({
+      callerId: From,
+      statusCallback: `${serverUrl}/call/status`,
+      statusCallbackMethod: 'POST',
+    });
 
-    const dial = twiml.dial({ callerId: from });
-    /**
-     * <Client> routes the call to a browser user by their identity
-     * This is how "Phone → Browser" works!
-     */
+    // Route to browser user - this makes the incoming call popup appear!
     dial.client(firstUser.identity);
+    console.log(`🔀 Routing to browser: ${firstUser.identity}`);
 
-    console.log(`🔀 Routing inbound to: ${firstUser.identity}`);
   } else {
-    // No one online - play voicemail
+    // No one online → voicemail
     twiml.say({ voice: 'alice' },
-      'No agents are available right now. Please leave a message after the beep.'
+      'Thank you for calling Ringvoo. No one is available. Please leave a message after the beep.'
     );
     twiml.record({
       maxLength: 60,
@@ -198,17 +165,15 @@ app.post('/twiml/inbound', (req, res) => {
 // POST /twiml/voicemail-done
 // ============================================================
 app.post('/twiml/voicemail-done', (req, res) => {
-  const { RecordingUrl, CallSid, From } = req.body;
-  console.log(`🎙️ Voicemail from ${From}: ${RecordingUrl}`);
-
-  // In production: save to DB, send email notification, etc.
+  const { RecordingUrl, From, RecordingDuration } = req.body;
+  console.log(`🎙️ Voicemail | From: ${From} | Duration: ${RecordingDuration}s`);
+  console.log(`   URL: ${RecordingUrl}`);
 
   const twiml = new twilio.twiml.VoiceResponse();
   twiml.say({ voice: 'alice' }, 'Your message has been saved. Thank you. Goodbye!');
   twiml.hangup();
 
-  res.type('text/xml');
-  res.send(twiml.toString());
+  res.type('text/xml').send(twiml.toString());
 });
 
 
@@ -218,35 +183,146 @@ app.post('/twiml/voicemail-done', (req, res) => {
 // ============================================================
 app.post('/call/status', (req, res) => {
   const { CallSid, CallStatus, Duration, To, From } = req.body;
-  console.log(`📊 ${CallSid} | ${From} → ${To} | ${CallStatus} | ${Duration || 0}s`);
+  console.log(`📊 ${From} → ${To} | ${CallStatus} | ${Duration || 0}s`);
   res.sendStatus(200);
 });
 
 
 // ============================================================
-// ROUTE 6: GET ACTIVE USERS
-// GET /users/active
-// Who is currently online in the browser
+// ROUTE 6: SEND SMS
+// POST /sms/send
+// Body: { to: "+971XXXXXXXXX", message: "Hello!" }
+//
+// ⚠️ NOTE: In trial mode SMS can only go to verified numbers
+// After upgrade: send to anyone!
 // ============================================================
-app.get('/users/active', (req, res) => {
-  const users = [...activeUsers.values()];
-  res.json({ success: true, count: users.length, users });
+app.post('/sms/send', async (req, res) => {
+  const { to, message } = req.body;
+
+  if (!to || !message) {
+    return res.status(400).json({ success: false, error: 'to and message required' });
+  }
+
+  try {
+    /**
+     * client.messages.create() = The Twilio SMS API
+     * Super simple compared to voice calls!
+     */
+    const msg = await client.messages.create({
+      to:   to,
+      from: twilioNumber,
+      body: message,
+    });
+
+    console.log(`📤 SMS sent → ${to} | SID: ${msg.sid} | Status: ${msg.status}`);
+
+    res.json({
+      success: true,
+      sid:     msg.sid,
+      to:      msg.to,
+      from:    msg.from,
+      status:  msg.status,
+      body:    msg.body,
+    });
+
+  } catch (e) {
+    console.error(`❌ SMS failed: ${e.message}`);
+    res.status(400).json({ success: false, error: e.message });
+  }
 });
 
 
 // ============================================================
-// ROUTE 7: USER GOES OFFLINE
+// ROUTE 7: RECEIVE INBOUND SMS
+// POST /sms/inbound
+//
+// ⚠️ SETUP REQUIRED:
+// Twilio Console → Phone Numbers → Active Numbers → your number
+// Messaging → A Message Comes In → Webhook
+// URL: https://your-ngrok-url/sms/inbound
+// Method: HTTP POST
+//
+// When someone texts +18153678725 → Twilio hits this URL
+// ============================================================
+app.post('/sms/inbound', (req, res) => {
+  const { From, To, Body, MessageSid } = req.body;
+
+  console.log(`📩 Inbound SMS | From: ${From} | Message: "${Body}"`);
+
+  // Store in memory
+  inboundSms.unshift({
+    sid:       MessageSid,
+    from:      From,
+    to:        To,
+    body:      Body,
+    direction: 'inbound',
+    status:    'received',
+    dateSent:  new Date().toISOString(),
+  });
+
+  if (inboundSms.length > 50) inboundSms.pop();
+
+  /**
+   * Return TwiML - you can auto-reply or just return empty
+   * Uncomment the message() line to send an auto-reply
+   */
+  const twiml = new twilio.twiml.MessagingResponse();
+  // twiml.message('Thanks for your message! We will reply soon. - Ringvoo');
+
+  res.type('text/xml').send(twiml.toString());
+});
+
+
+// ============================================================
+// ROUTE 8: GET SMS LOGS
+// GET /sms/logs
+// Returns sent + received messages from Twilio
+// ============================================================
+app.get('/sms/logs', async (req, res) => {
+  try {
+    const messages = await client.messages.list({ limit: 30 });
+
+    const formatted = messages.map(m => ({
+      sid:       m.sid,
+      to:        m.to,
+      from:      m.from,
+      body:      m.body,
+      status:    m.status,
+      direction: m.direction,
+      price:     m.price,
+      dateSent:  m.dateSent,
+    }));
+
+    res.json({ success: true, count: formatted.length, messages: formatted });
+
+  } catch (e) {
+    res.status(400).json({ success: false, error: e.message });
+  }
+});
+
+
+// ============================================================
+// ROUTE 9: ACTIVE USERS
+// GET /users/active
+// ============================================================
+app.get('/users/active', (req, res) => {
+  res.json({ success: true, count: activeUsers.size, users: [...activeUsers.values()] });
+});
+
+
+// ============================================================
+// ROUTE 10: USER OFFLINE
 // DELETE /users/:identity
 // ============================================================
 app.delete('/users/:identity', (req, res) => {
   activeUsers.delete(req.params.identity);
-  console.log(`👋 User offline: ${req.params.identity}`);
+  console.log(`👋 Offline: ${req.params.identity}`);
   res.json({ success: true });
 });
 
 
 // ============================================================
-// ROUTE 8: CALL LOGS
+// ROUTE 11: CALL LOGS
 // GET /calls/logs
 // ============================================================
 app.get('/calls/logs', async (req, res) => {
@@ -255,13 +331,13 @@ app.get('/calls/logs', async (req, res) => {
     res.json({
       success: true,
       calls: calls.map(c => ({
-        sid: c.sid,
-        to: c.to,
-        from: c.from,
-        status: c.status,
+        sid:       c.sid,
+        to:        c.to,
+        from:      c.from,
+        status:    c.status,
         direction: c.direction,
-        duration: c.duration,
-        price: c.price,
+        duration:  c.duration,
+        price:     c.price,
         startTime: c.startTime,
       }))
     });
@@ -272,7 +348,7 @@ app.get('/calls/logs', async (req, res) => {
 
 
 // ============================================================
-// ROUTE 9: ACCOUNT BALANCE
+// ROUTE 12: ACCOUNT BALANCE
 // GET /account/balance
 // ============================================================
 app.get('/account/balance', async (req, res) => {
@@ -285,14 +361,20 @@ app.get('/account/balance', async (req, res) => {
 });
 
 
+// Start server
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`\n🚀 Ringvoo running on port ${PORT}`);
-  console.log(`\n📖 Endpoints:`);
-  console.log(`   GET  /token              → Generate browser access token`);
-  console.log(`   POST /twiml/voice        → TwiML App webhook (outgoing)`);
-  console.log(`   POST /twiml/inbound      → Inbound call handler`);
-  console.log(`   GET  /users/active       → Online users`);
-  console.log(`   GET  /calls/logs         → Call history`);
-  console.log(`   GET  /account/balance    → Balance\n`);
+  console.log(`\n📖 API Endpoints:`);
+  console.log(`   GET    /token           → Browser access token`);
+  console.log(`   POST   /twiml/voice     → Outgoing call TwiML (TwiML App URL)`);
+  console.log(`   POST   /twiml/inbound   → Inbound call webhook`);
+  console.log(`   POST   /sms/send        → Send SMS`);
+  console.log(`   POST   /sms/inbound     → Inbound SMS webhook`);
+  console.log(`   GET    /sms/logs        → SMS history`);
+  console.log(`   GET    /calls/logs      → Call history`);
+  console.log(`   GET    /account/balance → Balance`);
+  console.log(`\n⚠️  Update these in Twilio Console → Phone Numbers → ${twilioNumber}:`);
+  console.log(`   Voice Webhook:     ${serverUrl}/twiml/inbound`);
+  console.log(`   Messaging Webhook: ${serverUrl}/sms/inbound\n`);
 });
