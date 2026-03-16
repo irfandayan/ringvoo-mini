@@ -32,22 +32,24 @@ app.use(express.static(path.join(__dirname, '.')));
 // ============================================================
 // TWILIO SETUP
 // ============================================================
+// Core Twilio credentials + config, loaded from .env
 const accountSid   = process.env.TWILIO_ACCOUNT_SID;
 const authToken    = process.env.TWILIO_AUTH_TOKEN;
-const apiKey       = process.env.TWILIO_API_KEY;
-const apiSecret    = process.env.TWILIO_API_SECRET;
-const twimlAppSid  = process.env.TWILIO_TWIML_APP_SID;
-const twilioNumber = process.env.TWILIO_PHONE_NUMBER;  // US number - calls
-const smsNumber    = process.env.TWILIO_SMS_NUMBER;    // UK number - SMS
-const serverUrl    = process.env.SERVER_URL;
+const apiKey       = process.env.TWILIO_API_KEY;         // used only for JWT access tokens
+const apiSecret    = process.env.TWILIO_API_SECRET;      // used only for JWT access tokens
+const twimlAppSid  = process.env.TWILIO_TWIML_APP_SID;   // TwiML App for browser calls
+const twilioNumber = process.env.TWILIO_PHONE_NUMBER;    // main Twilio voice number (outgoing/incoming)
+const smsNumber    = process.env.TWILIO_SMS_NUMBER;      // optional dedicated SMS number
+const serverUrl    = process.env.SERVER_URL;             // public URL (ngrok) used in TwiML + webhooks
 
 const client = twilio(accountSid, authToken);
 
-// In-memory stores (use DB in production)
-const activeUsers      = new Map();  // identity → { identity, joinedAt, callerId }
-const inboundSms       = [];
-const pendingOtps      = new Map();  // phone → { otp, expires, identity }
-const verifiedCallerIds = new Map(); // identity → { number, verifiedAt }
+// In-memory "database" used for demo purposes only.
+// In production you would persist these in a proper DB (Redis/Postgres/etc).
+const activeUsers       = new Map();   // identity → { identity, joinedAt, callerId }
+const inboundSms        = [];          // latest inbound SMS messages (capped)
+const pendingOtps       = new Map();   // phone → { otp, expires, identity } for caller ID verification
+const verifiedCallerIds = new Map();   // identity → { number, verifiedAt }
 
 
 
@@ -56,6 +58,10 @@ const verifiedCallerIds = new Map(); // identity → { number, verifiedAt }
 // ============================================================
 // ROUTE 1: GENERATE ACCESS TOKEN
 // GET /token?identity=username
+//
+// Generates a short‑lived JWT access token that the frontend
+// uses to create a Twilio.Device instance (browser calling).
+// Also tracks the user in the in‑memory activeUsers map.
 // ============================================================
 app.get('/token', (req, res) => {
   const identity = req.query.identity || `user_${Date.now()}`;
@@ -96,7 +102,11 @@ app.get('/token', (req, res) => {
 // ============================================================
 // ROUTE 2: OUTGOING CALL TWIML
 // POST /twiml/voice
-// Uses custom caller ID if user has one verified
+//
+// Twilio hits this endpoint when the browser starts an
+// outgoing call. We respond with TwiML that tells Twilio
+// whether to dial a real phone number or another Twilio
+// client, and which caller ID to use.
 // ============================================================
 app.post('/twiml/voice', (req, res) => {
   const to         = req.body.To;
@@ -138,6 +148,11 @@ app.post('/twiml/voice', (req, res) => {
 // ============================================================
 // ROUTE 3: INBOUND CALL
 // POST /twiml/inbound
+//
+// Handles calls that arrive on your Twilio phone number.
+// If at least one user is online, we connect the caller
+// to the first active identity. Otherwise we drop the
+// caller into a simple voicemail flow.
 // ============================================================
 app.post('/twiml/inbound', (req, res) => {
   const { From, CallSid } = req.body;
@@ -168,6 +183,10 @@ app.post('/twiml/inbound', (req, res) => {
 
 // ============================================================
 // ROUTE 4: VOICEMAIL DONE
+//
+// Called by Twilio after the caller finishes recording a
+// voicemail. We just play a short confirmation message and
+// hang up.
 // ============================================================
 app.post('/twiml/voicemail-done', (req, res) => {
   const { RecordingUrl, From, RecordingDuration } = req.body;
@@ -181,6 +200,10 @@ app.post('/twiml/voicemail-done', (req, res) => {
 
 // ============================================================
 // ROUTE 5: CALL STATUS
+//
+// Generic status callback for both inbound and outbound
+// calls. This only logs events and returns 200, but you
+// could extend it to persist analytics in a database.
 // ============================================================
 app.post('/call/status', (req, res) => {
   const { CallSid, CallStatus, Duration, To, From } = req.body;
@@ -194,12 +217,13 @@ app.post('/call/status', (req, res) => {
 // POST /callerid/send-otp
 // Body: { phone: "+971XXXXXXXXX", identity: "user1" }
 //
-// HOW IT WORKS:
-// 1. User enters their own number (+971XXXXXXXXX)
-// 2. Server generates a 6-digit OTP
-// 3. Twilio CALLS that number and reads the OTP out loud
-// 4. User hears the OTP and enters it in the app
-// 5. Server verifies OTP → number is now their caller ID
+// Flow:
+// 1. User enters their own phone number in the frontend.
+// 2. Backend generates a random 6‑digit OTP and stores it
+//    in pendingOtps with a 10‑minute expiry.
+// 3. Twilio places a voice call to that number and reads
+//    the OTP out loud using <Say> TwiML.
+// 4. User types the OTP into the app to prove ownership.
 // ============================================================
 app.post('/callerid/send-otp', async (req, res) => {
   const { phone, identity } = req.body;
@@ -261,6 +285,10 @@ app.post('/callerid/send-otp', async (req, res) => {
 // ROUTE 7: VERIFY OTP AND SAVE CUSTOM CALLER ID
 // POST /callerid/verify-otp
 // Body: { phone: "+971XXXXXXXXX", otp: "123456", identity: "user1" }
+//
+// Validates the OTP from pendingOtps, then stores the
+// verified number in verifiedCallerIds and attaches it to
+// the active user so future calls can use it as caller ID.
 // ============================================================
 app.post('/callerid/verify-otp', (req, res) => {
   const { phone, otp, identity } = req.body;
@@ -317,6 +345,9 @@ app.post('/callerid/verify-otp', (req, res) => {
 // ============================================================
 // ROUTE 8: GET VERIFIED CALLER ID
 // GET /callerid/:identity
+//
+// Simple helper for the frontend to show the currently
+// verified caller ID for a given identity.
 // ============================================================
 app.get('/callerid/:identity', (req, res) => {
   const info = verifiedCallerIds.get(req.params.identity);
@@ -331,6 +362,9 @@ app.get('/callerid/:identity', (req, res) => {
 // ============================================================
 // ROUTE 9: REMOVE CUSTOM CALLER ID
 // DELETE /callerid/:identity
+//
+// Clears the verified caller ID for an identity, both from
+// verifiedCallerIds and from the activeUsers map.
 // ============================================================
 app.delete('/callerid/:identity', (req, res) => {
   verifiedCallerIds.delete(req.params.identity);
@@ -349,10 +383,12 @@ app.delete('/callerid/:identity', (req, res) => {
 // GET /rates
 // GET /rates?search=UAE
 //
-// Uses Twilio Pricing API v1 to fetch ALL countries live
-// Twilio API: https://pricing.twilio.com/v1/Voice/Countries
-// Each country rate is multiplied by 2 for Ringvoo markup
-// Cached for 1 hour to avoid too many API calls
+// Uses Twilio Pricing API v1 to fetch outbound call prices
+// per country. The frontend then:
+// - shows "lowest" mobile + landline rates (what end users see)
+// - shows full prefix breakdown for power users
+//
+// Business rule: Ringvoo rate = 2 × Twilio rate (markup).
 // ============================================================
 
 // Country list cache (just names + ISO codes - tiny, load once)
@@ -377,7 +413,10 @@ const authHeader = () => 'Basic ' + Buffer.from(`${accountSid}:${authToken}`).to
 // ============================================================
 // ROUTE 10a: GET ALL COUNTRIES LIST (for dropdown)
 // GET /rates/countries
-// Fetches just country names + ISO codes - fast, cached forever
+//
+// Fetches just country name + ISO code + flag emoji.
+// This is used to populate the country <select> on the
+// Rates tab. Response is cached in memory for speed.
 // ============================================================
 app.get('/rates/countries', async (req, res) => {
   try {
@@ -412,8 +451,8 @@ app.get('/rates/countries', async (req, res) => {
 // GET /rates/country/:isoCode
 //
 // Returns TWO sections:
-// 1. lowest → { mobile, landline } = what YadaPhone shows
-// 2. prefixes → { mobile[], landline[], other[], all[] } = full list
+// 1. lowest  → { mobile, landline }  (simple card view)
+// 2. prefixes→ { mobile[], landline[], other[], all[] } (full breakdown)
 // ============================================================
 
 const MOBILE_KEYWORDS   = ['mobile', 'cell', 'wireless', 'gsm'];
@@ -509,6 +548,10 @@ app.get('/rates/country/:isoCode', async (req, res) => {
 // ============================================================
 // ROUTE 11: SEND SMS
 // POST /sms/send
+//
+// Sends an outgoing SMS using either the dedicated SMS
+// number (smsNumber) or, if not configured, the main
+// voice number (twilioNumber) as the sender.
 // ============================================================
 app.post('/sms/send', async (req, res) => {
   const { to, message } = req.body;
@@ -533,6 +576,10 @@ app.post('/sms/send', async (req, res) => {
 // ============================================================
 // ROUTE 12: INBOUND SMS WEBHOOK
 // POST /sms/inbound
+//
+// Twilio calls this webhook whenever your number receives
+// an SMS. We push the message into an in‑memory list so
+// the frontend can display a short inbox.
 // ============================================================
 app.post('/sms/inbound', (req, res) => {
   const { From, To, Body, MessageSid } = req.body;
@@ -547,6 +594,9 @@ app.post('/sms/inbound', (req, res) => {
 // ============================================================
 // ROUTE 13: SMS LOGS
 // GET /sms/logs
+//
+// Fetches recent messages directly from Twilio so you can
+// see both inbound and outbound SMS history in the UI.
 // ============================================================
 app.get('/sms/logs', async (req, res) => {
   try {
@@ -567,6 +617,9 @@ app.get('/sms/logs', async (req, res) => {
 
 // ============================================================
 // ROUTE 14: ACTIVE USERS
+//
+// Simple helpers to see/remove the identities that have
+// recently requested an access token.
 // ============================================================
 app.get('/users/active', (req, res) => {
   res.json({ success: true, count: activeUsers.size, users: [...activeUsers.values()] });
@@ -580,6 +633,9 @@ app.delete('/users/:identity', (req, res) => {
 
 // ============================================================
 // ROUTE 15: CALL LOGS
+//
+// Lists recent calls for analytics/debugging in the Calls
+// tab. Data comes from Twilio's Calls API.
 // ============================================================
 app.get('/calls/logs', async (req, res) => {
   try {
@@ -599,12 +655,183 @@ app.get('/calls/logs', async (req, res) => {
 
 // ============================================================
 // ROUTE 16: ACCOUNT BALANCE
+//
+// Shows the current Twilio account balance + currency so
+// you can keep an eye on credit while testing.
 // ============================================================
 app.get('/account/balance', async (req, res) => {
   try {
     const balance = await client.balance.fetch();
     res.json({ success: true, balance: balance.balance, currency: balance.currency });
   } catch (e) {
+    res.status(400).json({ success: false, error: e.message });
+  }
+});
+
+
+// ============================================================
+// ROUTE 17: SEARCH AVAILABLE NUMBERS
+// GET /numbers/search
+// Query: country=US|CA, type=local|mobile|tollfree, areaCode, limit
+//
+// Uses Twilio's Available Phone Numbers API to search for
+// numbers that match the filters. We only return numbers
+// that support voice or SMS so they are actually usable.
+// ============================================================
+app.get('/numbers/search', async (req, res) => {
+  const country  = (req.query.country || '').toUpperCase();
+  const typeRaw  = (req.query.type || 'local').toLowerCase();
+  const areaCode = req.query.areaCode;
+  const limit    = parseInt(req.query.limit, 10) || 10;
+
+  if (!['US', 'CA'].includes(country)) {
+    return res.status(400).json({ success: false, error: 'country must be US or CA' });
+  }
+
+  const type = ['local', 'mobile', 'tollfree'].includes(typeRaw) ? typeRaw : 'local';
+
+  console.log(`🔎 Searching numbers | country=${country} | type=${type} | areaCode=${areaCode || 'any'} | limit=${limit}`);
+
+  try {
+    let search;
+    const commonFilters = {
+      limit,
+      voiceEnabled: true,
+      smsEnabled: true,
+    };
+
+    if (type === 'local') {
+      // Standard geographic numbers
+      search = client.availablePhoneNumbers(country).local;
+    } else if (type === 'mobile') {
+      /**
+       * Twilio only exposes the "Mobile" sub-resource for certain countries.
+       * For US/CA mobile numbers are returned under the "local" resource with
+       * smsEnabled=true. To keep this demo simple, we:
+       * - use the dedicated .mobile resource when it exists (non‑US/CA),
+       * - but for US/CA we just search local numbers and rely on smsEnabled.
+       */
+      if (['US', 'CA'].includes(country)) {
+        search = client.availablePhoneNumbers(country).local;
+      } else {
+        search = client.availablePhoneNumbers(country).mobile;
+      }
+    } else {
+      // Toll-free numbers
+      search = client.availablePhoneNumbers(country).tollFree;
+    }
+
+    const opts = { ...commonFilters };
+    if (areaCode && country === 'US') {
+      opts.areaCode = areaCode;
+    }
+
+    const numbers = await search.list(opts);
+
+    const filtered = numbers
+      .filter(n => {
+        const caps = n.capabilities || {};
+        const voice = caps.voice === true || caps.Voice === true;
+        const sms   = caps.sms === true   || caps.SMS === true;
+        return voice || sms;
+      })
+      .map(n => ({
+        phoneNumber: n.phoneNumber,
+        friendlyName: n.friendlyName,
+        locality: n.locality,
+        region: n.region,
+        capabilities: {
+          voice: !!(n.capabilities && (n.capabilities.voice || n.capabilities.Voice)),
+          sms:   !!(n.capabilities && (n.capabilities.sms   || n.capabilities.SMS)),
+          mms:   !!(n.capabilities && (n.capabilities.mms   || n.capabilities.MMS)),
+        },
+      }));
+
+    res.json({
+      success: true,
+      country,
+      count: filtered.length,
+      numbers: filtered,
+    });
+
+  } catch (e) {
+    console.error(`❌ Number search failed: ${e.message}`);
+    res.status(400).json({ success: false, error: e.message });
+  }
+});
+
+
+// ============================================================
+// ROUTE 18: PURCHASE NUMBER
+// POST /numbers/buy
+// Body: { "phoneNumber": "+14155551234" }
+//
+// Actually buys a phone number from Twilio and wires
+// voiceUrl + smsUrl so inbound calls/SMS are routed back
+// into this same Express server.
+// ============================================================
+app.post('/numbers/buy', async (req, res) => {
+  const { phoneNumber } = req.body;
+
+  if (!phoneNumber) {
+    return res.status(400).json({ success: false, error: 'phoneNumber is required' });
+  }
+
+  console.log(`🛒 Purchasing number: ${phoneNumber}`);
+
+  try {
+    const purchased = await client.incomingPhoneNumbers.create({
+      phoneNumber,
+      voiceUrl: `${serverUrl}/twiml/inbound`,
+      smsUrl:   `${serverUrl}/sms/inbound`,
+    });
+
+    console.log(`📞 Number purchased: ${purchased.phoneNumber} | SID: ${purchased.sid}`);
+
+    res.json({
+      success: true,
+      sid: purchased.sid,
+      phoneNumber: purchased.phoneNumber,
+    });
+
+  } catch (e) {
+    console.error(`❌ Number purchase failed: ${e.message}`);
+    res.status(400).json({ success: false, error: e.message });
+  }
+});
+
+
+// ============================================================
+// ROUTE 19: LIST OWNED NUMBERS
+// GET /numbers/list
+//
+// Convenience endpoint for the Numbers tab to show all
+// Twilio phone numbers currently owned by this account.
+// ============================================================
+app.get('/numbers/list', async (req, res) => {
+  console.log('📱 Owned numbers loaded');
+
+  try {
+    const numbers = await client.incomingPhoneNumbers.list();
+
+    const formatted = numbers.map(n => ({
+      sid: n.sid,
+      phoneNumber: n.phoneNumber,
+      friendlyName: n.friendlyName,
+      voiceUrl: n.voiceUrl,
+      smsUrl: n.smsUrl,
+    }));
+
+    console.log(`📱 Owned numbers loaded: ${formatted.length}`);
+
+    res.json({
+      success: true,
+      count: formatted.length,
+      numbers: formatted,
+    });
+
+  } catch (e) {
+    console.error(`❌ Failed to load owned numbers: ${e.message}`);
     res.status(400).json({ success: false, error: e.message });
   }
 });
@@ -628,6 +855,9 @@ app.listen(PORT, () => {
   console.log(`   GET    /sms/logs             → SMS history`);
   console.log(`   GET    /calls/logs           → Call history`);
   console.log(`   GET    /account/balance      → Balance`);
+  console.log(`   GET    /numbers/search       → Find available numbers`);
+  console.log(`   POST   /numbers/buy          → Purchase number`);
+  console.log(`   GET    /numbers/list         → List owned numbers`);
   console.log(`\n⚠️  Twilio Console → Phone Numbers → ${twilioNumber}:`);
   console.log(`   Voice Webhook:     ${serverUrl}/twiml/inbound`);
   console.log(`   Messaging Webhook: ${serverUrl}/sms/inbound\n`);

@@ -227,6 +227,36 @@ header { display: flex; align-items: center; padding: 0 24px; height: 54px; bord
 .rate-profit { font-family: var(--mono); font-size: 11px; color: var(--green); }
 .rates-info { background: var(--gold-dim); border: 1px solid rgba(240,192,64,0.2); border-radius: 8px; padding: 10px 14px; font-size: 11px; color: var(--gold); font-family: var(--mono); }
 
+/* ── NUMBERS TAB ── */
+.numbers-layout { display: flex; flex-direction: column; gap: 10px; }
+.numbers-search-panel .numbers-search-body { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.numbers-filters { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
+.numbers-select, .numbers-input { width: 100%; background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 8px 10px; border-radius: 7px; font-family: var(--mono); font-size: 12px; outline: none; }
+.numbers-select:focus, .numbers-input:focus { border-color: var(--blue); }
+.btn-search-numbers { background: var(--blue); color: white; border: none; border-radius: 7px; padding: 10px; font-size: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; transition: all 0.15s; font-family: var(--sans); }
+.btn-search-numbers:hover { background: #3d8ae6; transform: translateY(-1px); }
+.btn-search-numbers:disabled { background: var(--surface3); color: var(--muted); cursor: not-allowed; transform: none; }
+.numbers-msg { padding: 8px 10px; border-radius: 6px; font-size: 10px; font-family: var(--mono); display: none; }
+.numbers-msg.ok { background: var(--green-dim); color: var(--green); border: 1px solid rgba(0,229,160,0.2); display: block; }
+.numbers-msg.err { background: var(--red-dim); color: var(--red); border: 1px solid rgba(255,77,106,0.2); display: block; }
+.panel-sub { font-size: 9px; color: var(--muted); font-family: var(--mono); }
+.numbers-results-body { max-height: 320px; }
+.number-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.number-card:hover { border-color: var(--border2); }
+.number-info { flex: 1; min-width: 0; }
+.number-phone { font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--green); }
+.number-meta { font-size: 10px; color: var(--muted); font-family: var(--mono); margin-top: 3px; }
+.number-caps { display: flex; gap: 6px; font-size: 9px; font-family: var(--mono); }
+.number-cap { padding: 2px 6px; border-radius: 4px; }
+.number-cap.voice { background: var(--blue-dim); color: var(--blue); }
+.number-cap.sms { background: var(--purple-dim); color: var(--purple); }
+.number-cap.mms { background: var(--amber-dim); color: var(--amber); }
+.btn-buy-num { background: var(--green); color: #000; border: none; border-radius: 6px; padding: 6px 12px; font-size: 11px; font-weight: 700; cursor: pointer; white-space: nowrap; transition: all 0.15s; font-family: var(--sans); }
+.btn-buy-num:hover { background: #00cc8f; }
+.btn-buy-num:disabled { background: var(--surface3); color: var(--muted); cursor: not-allowed; }
+.owned-num-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border-radius: 8px; margin-bottom: 4px; background: var(--surface2); border: 1px solid var(--border); }
+.owned-num-phone { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--green); }
+
 /* Incoming overlay */
 .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(8px); display: none; place-items: center; z-index: 999; }
 .overlay.show { display: grid; }
@@ -263,6 +293,7 @@ header { display: flex; align-items: center; padding: 0 24px; height: 54px; bord
     <button class="tab" onclick="switchTab('sms')">💬 Messages</button>
     <button class="tab" onclick="switchTab('callerid')">🪪 Caller ID</button>
     <button class="tab" onclick="switchTab('rates')">💰 Rates</button>
+    <button class="tab" onclick="switchTab('numbers')">📱 Numbers</button>
   </div>
   <div class="status-chip" id="statusChip">
     <div class="chip-dot"></div>
@@ -570,6 +601,77 @@ header { display: flex; align-items: center; padding: 0 24px; height: 54px; bord
       </div>
     </div>
 
+    <!-- NUMBERS TAB -->
+    <div class="tab-panel" id="tab-numbers">
+      <div class="numbers-layout">
+
+        <!-- Search -->
+        <div class="panel numbers-search-panel">
+          <div class="panel-head"><span class="panel-title">🔎 Search available numbers</span></div>
+          <div class="numbers-search-body">
+            <div class="numbers-filters">
+              <div>
+                <div class="field-label">Country</div>
+                <select id="numCountry" class="numbers-select">
+                  <option value="US">🇺🇸 US</option>
+                  <option value="CA">🇨🇦 Canada</option>
+                </select>
+              </div>
+              <div>
+                <div class="field-label">Type</div>
+                <select id="numType" class="numbers-select">
+                  <option value="local">Local</option>
+                  <option value="mobile">Mobile</option>
+                  <option value="tollfree">Toll-free</option>
+                </select>
+              </div>
+              <div>
+                <div class="field-label">Area code (US only)</div>
+                <input type="text" id="numAreaCode" class="numbers-input" placeholder="e.g. 415" maxlength="3" pattern="[0-9]*">
+              </div>
+              <div>
+                <div class="field-label">Limit</div>
+                <select id="numLimit" class="numbers-select">
+                  <option value="10">10</option>
+                  <option value="20">20</option>
+                  <option value="30">30</option>
+                </select>
+              </div>
+            </div>
+            <button class="btn-search-numbers" id="btnSearchNumbers" onclick="searchNumbers()">
+              <span>🔎</span> Search numbers
+            </button>
+            <div class="numbers-msg" id="numbersSearchMsg"></div>
+          </div>
+        </div>
+
+        <!-- Available results -->
+        <div class="panel">
+          <div class="panel-head">
+            <span class="panel-title">📋 Available numbers</span>
+            <span class="panel-sub" id="numbersCount"></span>
+          </div>
+          <div class="panel-body numbers-results-body" id="numbersResults">
+            <div class="empty" id="numbersResultsEmpty">Use search above to find numbers</div>
+            <div id="numbersResultsList"></div>
+          </div>
+        </div>
+
+        <!-- Owned numbers -->
+        <div class="panel">
+          <div class="panel-head">
+            <span class="panel-title">📱 Your numbers</span>
+            <button class="panel-btn" onclick="loadOwnedNumbers()">↻ refresh</button>
+          </div>
+          <div class="panel-body" id="ownedNumbersBody">
+            <div class="empty" id="ownedNumbersEmpty">Loading...</div>
+            <div id="ownedNumbersList"></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -587,27 +689,37 @@ header { display: flex; align-items: center; padding: 0 24px; height: 54px; bord
 </div>
 
 <script>
+// Basic client‑side state for the Twilio Voice JS SDK
 let device = null, activeCall = null, myIdentity = null;
 let isMuted = false, timerInterval = null, timerSecs = 0, incomingConn = null;
 let myCallerId = null;
 let allRates = [];
 
+// Helper to read the backend base URL from the header input.
+// We always strip a trailing slash so `url() + '/path'` is safe.
 const url = () => document.getElementById('serverUrl').value.replace(/\/$/, '');
 
 // ─── TABS ───
+// Simple tab switcher: toggles which right‑hand panel is visible
+// and triggers any initial data loading for that tab.
 function switchTab(tab) {
+  const tabIds = ['calls','sms','callerid','rates','numbers'];
   document.querySelectorAll('.tab').forEach((t,i) => {
-    t.classList.toggle('active', ['calls','sms','callerid','rates'][i] === tab);
+    t.classList.toggle('active', tabIds[i] === tab);
   });
-  ['calls','sms','callerid','rates'].forEach(t => {
+  tabIds.forEach(t => {
     document.getElementById(`tab-${t}`).classList.toggle('active', t === tab);
   });
   if (tab === 'sms') loadSmsLog();
   if (tab === 'rates') loadRates();
   if (tab === 'callerid' && myIdentity) loadCurrentCallerId();
+  if (tab === 'numbers') loadOwnedNumbers();
 }
 
 // ─── REGISTER ───
+// Fetches an access token from the backend and creates a
+// Twilio.Device instance so this browser can make/receive
+// calls as the chosen identity.
 async function register() {
   const identity = document.getElementById('identInput').value.trim();
   if (!identity) { alert('Enter a username!'); return; }
@@ -643,6 +755,9 @@ async function register() {
 }
 
 // ─── MAKE CALL ───
+// Starts an outgoing call from the browser using Twilio.Device.
+// If the user has a verified caller ID we pass it through so
+// the backend can use it as the callerId in /twiml/voice.
 async function makeCall() {
   const number = document.getElementById('screenNum').textContent.trim();
   if (!device || !number || number === '+') { alert('Enter a number!'); return; }
@@ -662,6 +777,7 @@ async function makeCall() {
 }
 
 // ─── ACCEPT/REJECT ───
+// Handle incoming call pop‑up actions from the overlay.
 function acceptCall() {
   if (!incomingConn) return;
   document.getElementById('overlay').classList.remove('show');
@@ -679,6 +795,7 @@ function rejectCall() {
 }
 
 // ─── HANG UP ───
+// Ends any active call and resets the UI back to idle state.
 function hangUp() {
   if (activeCall) activeCall.disconnect();
   if (device) device.disconnectAll();
@@ -696,6 +813,8 @@ function endCallUI() {
 }
 
 // ─── DIALPAD ───
+// Updates the number shown on the phone screen and, if a call
+// is in progress, also sends DTMF digits to the remote side.
 function pressKey(d) {
   const el = document.getElementById('screenNum');
   if (el.textContent === '+') el.textContent = d === '0' ? '+' : d;
@@ -718,6 +837,7 @@ function toggleMute() {
 function toggleSpeaker() { alert('Speaker uses Web Audio API — add in production!'); }
 
 // ─── TIMER ───
+// Very small call duration timer displayed under the number.
 function startTimer() {
   timerSecs = 0;
   document.getElementById('screenTimer').style.display = 'block';
@@ -731,6 +851,7 @@ function startTimer() {
 function stopTimer() { clearInterval(timerInterval); timerSecs = 0; }
 
 // ─── BALANCE ───
+// Loads the current Twilio account balance into the Calls tab.
 async function fetchBalance() {
   const btn = document.getElementById('balRef');
   btn.classList.add('spinning');
@@ -746,6 +867,8 @@ async function fetchBalance() {
 }
 
 // ─── USERS ───
+// Lists all other active identities so you can click‑to‑call
+// between browsers (Browser → Browser).
 async function refreshUsers() {
   try {
     const r = await fetch(`${url()}/users/active`);
@@ -763,6 +886,8 @@ async function refreshUsers() {
 }
 
 // ─── CALL LOG ───
+// Pulls recent calls from the backend and renders stats +
+// a compact list in the Call History panel.
 async function loadCallLog() {
   try {
     const r = await fetch(`${url()}/calls/logs`);
@@ -789,6 +914,7 @@ async function loadCallLog() {
 }
 
 // ─── SMS ───
+// Compose + send SMS and display a mini inbox/outbox.
 async function sendSms() {
   const to      = document.getElementById('smsTo').value.trim();
   const message = document.getElementById('smsBody').value.trim();
@@ -844,6 +970,8 @@ async function loadSmsLog() {
 }
 
 // ─── CALLER ID ───
+// Client side helpers for the "Custom Caller ID" verification
+// flow (request OTP call, verify code, show current caller ID).
 async function sendOtp() {
   const phone = document.getElementById('cidPhone').value.trim();
   if (!phone) { alert('Enter your phone number!'); return; }
@@ -943,6 +1071,9 @@ async function removeCallerId() {
 }
 
 // ─── RATES ───
+// Two‑step flow:
+// 1) loadRates() fills the country dropdown
+// 2) fetchCountryRate() loads pricing for the selected country
 
 // Step 1: Load country list for dropdown (fast - just names)
 async function loadRates() {
@@ -1047,6 +1178,137 @@ async function fetchCountryRate() {
   } catch(e) {
     empty.innerHTML = `❌ Could not fetch rate: ${e.message}`;
   }
+}
+
+// ─── NUMBERS TAB ───
+// Search + purchase + list Twilio phone numbers directly
+// from the dashboard (US / Canada only in this demo).
+async function searchNumbers() {
+  const country  = document.getElementById('numCountry').value;
+  const type     = document.getElementById('numType').value;
+  const areaCode = document.getElementById('numAreaCode').value.trim();
+  const limit    = document.getElementById('numLimit').value;
+  const btn      = document.getElementById('btnSearchNumbers');
+  const msg     = document.getElementById('numbersSearchMsg');
+  const list    = document.getElementById('numbersResultsList');
+  const empty   = document.getElementById('numbersResultsEmpty');
+  const countEl = document.getElementById('numbersCount');
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinning">↻</span> Searching...';
+  msg.style.display = 'none';
+  list.innerHTML = '';
+  empty.textContent = 'Searching...';
+
+  const params = new URLSearchParams({ country, type, limit });
+  if (areaCode && country === 'US') params.set('areaCode', areaCode);
+
+  try {
+    const r = await fetch(`${url()}/numbers/search?${params}`);
+    const d = await r.json();
+
+    if (!d.success) throw new Error(d.error || 'Search failed');
+
+    countEl.textContent = d.count ? `${d.count} found` : '';
+    empty.style.display = d.numbers && d.numbers.length ? 'none' : 'block';
+    empty.textContent = d.numbers && d.numbers.length ? '' : 'No numbers found. Try different filters.';
+
+    if (d.numbers && d.numbers.length) {
+      list.innerHTML = d.numbers.map(n => {
+        const caps = [];
+        if (n.capabilities && n.capabilities.voice) caps.push('<span class="number-cap voice">Voice</span>');
+        if (n.capabilities && n.capabilities.sms) caps.push('<span class="number-cap sms">SMS</span>');
+        if (n.capabilities && n.capabilities.mms) caps.push('<span class="number-cap mms">MMS</span>');
+        const loc = [n.locality, n.region].filter(Boolean).join(', ') || '—';
+        return `
+          <div class="number-card">
+            <div class="number-info">
+              <div class="number-phone">${n.phoneNumber}</div>
+              <div class="number-meta">${n.friendlyName || n.phoneNumber} · ${loc}</div>
+              <div class="number-caps">${caps.join('')}</div>
+            </div>
+            <button class="btn-buy-num" onclick="buyNumber('${n.phoneNumber}')">Buy</button>
+          </div>`;
+      }).join('');
+    }
+    msg.className = 'numbers-msg ok';
+    msg.textContent = `Found ${d.count || 0} numbers.`;
+    msg.style.display = 'block';
+  } catch (e) {
+    empty.style.display = 'block';
+    empty.textContent = 'Search failed.';
+    countEl.textContent = '';
+    msg.className = 'numbers-msg err';
+    msg.textContent = e.message;
+    msg.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<span>🔎</span> Search numbers';
+  }
+}
+
+async function loadOwnedNumbers() {
+  const list  = document.getElementById('ownedNumbersList');
+  const empty = document.getElementById('ownedNumbersEmpty');
+
+  empty.textContent = 'Loading...';
+  empty.style.display = 'block';
+  list.innerHTML = '';
+
+  try {
+    const r = await fetch(`${url()}/numbers/list`);
+    const d = await r.json();
+
+    if (!d.success) throw new Error(d.error || 'Failed to load');
+
+    if (!d.numbers || !d.numbers.length) {
+      empty.textContent = 'No numbers yet. Search and buy above.';
+      empty.style.display = 'block';
+      return;
+    }
+    empty.style.display = 'none';
+    list.innerHTML = d.numbers.map(n => `
+      <div class="owned-num-item">
+        <div>
+          <div class="owned-num-phone">${n.phoneNumber}</div>
+          <div style="font-size:9px;color:var(--muted);font-family:var(--mono)">${n.friendlyName || 'Ringvoo Number'}</div>
+        </div>
+      </div>`).join('');
+  } catch (e) {
+    empty.textContent = 'Could not load: ' + e.message;
+    empty.style.display = 'block';
+  }
+}
+
+async function buyNumber(phoneNumber) {
+  if (!confirm(`Purchase ${phoneNumber}? This will charge your Twilio account.`)) return;
+
+  const msg = document.getElementById('numbersSearchMsg');
+  msg.className = 'numbers-msg ok';
+  msg.textContent = 'Purchasing...';
+  msg.style.display = 'block';
+
+  try {
+    const r = await fetch(`${url()}/numbers/buy`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phoneNumber }),
+    });
+    const d = await r.json();
+
+    if (d.success) {
+      msg.className = 'numbers-msg ok';
+      msg.textContent = `✅ Purchased ${d.phoneNumber}`;
+      loadOwnedNumbers();
+    } else {
+      msg.className = 'numbers-msg err';
+      msg.textContent = d.error || 'Purchase failed';
+    }
+  } catch (e) {
+    msg.className = 'numbers-msg err';
+    msg.textContent = e.message;
+  }
+  msg.style.display = 'block';
 }
 
 // ─── HELPERS ───
